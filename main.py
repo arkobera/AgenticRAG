@@ -22,6 +22,7 @@ def setup_embedding_fn():
                 model='gemini-embedding-001',
                 contents=text,
             )
+            return result.embeddings[0].values #type: ignore
         except Exception as e:
             print(f"Embedding failed: {e}")
             return [0.0] * 768
@@ -114,7 +115,7 @@ def main():
     generator = RAGGenerator(
     retriever=retriever,
     llm_client=client,
-    model_name="gemini-2.0-flash",
+    model_name="gemini-2.5-flash",
     min_context_score=0.2,
     top_k=5,
     )
@@ -131,10 +132,11 @@ def main():
     print("=" * 80)
     
     queries = [
-        "How do I troubleshoot WiFi connection issues?",
-        # "What is the recommended water temperature for brewing?",
+        # "How do I troubleshoot WiFi connection issues?",
+        # "What is the document about",
         # "Can multiple phones control the same coffee maker?",
         # "How often should I clean the machine?",
+        "What is the capacity of the machine?"
     ]
     for i, query in enumerate(queries, 1):
         print(f"\nQuery {i}: {query}")
@@ -145,7 +147,7 @@ def main():
         print(f"Confidence: {response['confidence']:.2f}")
         print(f"Retrieved {response['num_context_chunks']} context chunks")
         
-        if response['chunk_scores']:
+        if 'chunk_scores' in response.keys():
             print("Chunk scores:")
             for score in response['chunk_scores'][:3]:
                 print(f"  - {score['chunk_id']}: {score['score']:.3f}")
