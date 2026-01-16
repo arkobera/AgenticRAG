@@ -26,22 +26,6 @@ Query → Embedding → Dense Search (60%) + Sparse Search (40%)
                            ↓
                   Grounded Answer + Sources + Confidence
 
-## 📁 Project Structure
-
-```
-AI-Powered Document Q&A System/
-├── app.py                    # Main Streamlit app
-├── requirements.txt          # Dependencies
-├── .env.example             # API key template
-├── src/rag/                 # Core RAG system
-│   ├── document_processing/ # Load & chunk documents
-│   ├── vector_store/        # Embeddings & indexing
-│   ├── retrieval/           # Hybrid search
-│   └── generation/          # LLM responses
-├── tests/                   # Unit tests
-├── data/                    # Sample documents
-└── docs/                    # Documentation
-```
 
 ## 📜 License
 
