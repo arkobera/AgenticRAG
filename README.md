@@ -41,6 +41,7 @@ AI-Powered Document Q&A System/
 ├── tests/                   # Unit tests
 ├── data/                    # Sample documents
 └── docs/                    # Documentation
+```
 
 ## 📜 License
 
