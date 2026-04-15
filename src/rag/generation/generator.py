@@ -2,67 +2,82 @@ from typing import Optional, Callable, List, Dict
 from src.rag.retrieval.retriever import HybridRetriever
 from src.rag.generation.prompts import GroundingPrompts, ResponseBuilder
 from src.rag.doc_proc.models import RetrievalResult
-from google.genai import types
 
 
 class RAGGenerator:
     """
     Complete RAG pipeline: retrieves context and generates grounded responses.
+    Uses HuggingFace LLM for generation.
     """
 
     def __init__(
         self,
         retriever: HybridRetriever,
-        llm_client,
-        model_name: str,
+        llm_fn: Callable[[str], str],
         min_context_score: float = 0.3,
         top_k: int = 5,
     ):
+        """
+        Initialize RAG Generator.
+        
+        Args:
+            retriever: HybridRetriever instance
+            llm_fn: Function that takes a prompt and returns generated text
+            min_context_score: Minimum relevance score threshold
+            top_k: Number of chunks to retrieve
+        """
         self.retriever = retriever
-        self.llm_client = llm_client
-        self.model_name = model_name
+        self.llm_fn = llm_fn
         self.min_context_score = min_context_score
         self.top_k = top_k
+    
     def generate(self, query: str, use_verification: bool = False) -> Dict:
+        """
+        Generate response for a query using RAG pipeline.
+        
+        Args:
+            query: User query
+            use_verification: Whether to verify response grounding
+            
+        Returns:
+            Dictionary with answer, sources, confidence, etc.
+        """
         retrieved_chunks, retrieval_reasoning = self.retriever.retrieve_with_reasoning(
-        query=query,
-        top_k=self.top_k,
+            query=query,
+            top_k=self.top_k,
         )
 
         relevant_chunks = [
-        c for c in retrieved_chunks
-        if c.score >= self.min_context_score]
+            c for c in retrieved_chunks
+            if c.score >= self.min_context_score
+        ]
 
         if not relevant_chunks:
             return ResponseBuilder.build_fallback_response(
                 query,
                 reason="Could not find relevant documentation.",
-                 )
+            )
 
         context_texts = [c.content for c in relevant_chunks]
         sources = [c.source_doc for c in relevant_chunks]
 
         prompt = GroundingPrompts.build_rag_prompt(
-        query=query,
-        context_chunks=context_texts,
-        sources=sources,
+            query=query,
+            context_chunks=context_texts,
+            sources=sources,
         )
 
-        # 🔥 Gemini call (model + contents together)
-        response = self.llm_client.models.generate_content(
-        model=self.model_name,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=GroundingPrompts.system_prompt(),
-        )
-        )
+        # Generate using HuggingFace LLM
+        answer = self.llm_fn(prompt)
 
-        answer = response.text
-
-        response =  ResponseBuilder.build_response(
-        answer=answer,
-        sources=sources,
-        confidence=min(1.0,sum(c.score for c in relevant_chunks) / len(relevant_chunks)))
+        response = ResponseBuilder.build_response(
+            answer=answer,
+            sources=sources,
+            confidence=min(
+                1.0,
+                sum(c.score for c in relevant_chunks) / len(relevant_chunks)
+            ) if relevant_chunks else 0.0
+        )
         
         response["retrieval_reasoning"] = retrieval_reasoning
         response["num_context_chunks"] = len(relevant_chunks)
@@ -72,6 +87,7 @@ class RAGGenerator:
             for c in relevant_chunks
         ]
         return response
+    
     def generate_batch(
         self,
         queries: List[str],
@@ -82,6 +98,7 @@ class RAGGenerator:
             self.generate(query, use_verification=use_verification)
             for query in queries
         ]
+    
     def generate_with_followup(
         self,
         query: str,
@@ -93,10 +110,7 @@ class RAGGenerator:
         """
         results = [self.generate(query)]
         
-        # For follow-ups, use same context
-        first_response = results[0]
-        sources = first_response.get("sources", [])
-        
+        # For follow-ups, generate independently
         for followup in followup_questions:
             followup_result = self.generate(followup)
             results.append(followup_result)

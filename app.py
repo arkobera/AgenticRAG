@@ -3,17 +3,15 @@ import os
 import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 from src.rag.doc_proc.processor import DocumentProcessor
 from src.rag.vector_store.factory import VectorStoreFactory
 from src.rag.retrieval.retriever import HybridRetriever
 from src.rag.generation.generator import RAGGenerator
 from src.rag.generation.prompts import GroundingPrompts
+from src.rag.generation.langchain_setup import setup_embedding_fn, setup_llm
 
 load_dotenv()
-client = genai.Client()
 
 st.set_page_config(
     page_title="RAG System",
@@ -90,37 +88,15 @@ initialize_session()
 # ============================================================================
 
 @st.cache_resource
-def setup_embedding_fn():
-    """Setup Gemini embedding function with caching"""
-    def embed_text(text: str):
-        try:
-            result = client.models.embed_content(
-                model='gemini-embedding-001',
-                contents=text,
-            )
-            return result.embeddings[0].values #type: ignore
-        except Exception as e:
-            st.warning(f"Embedding API limit reached. Using fallback embeddings.")
-            import random
-            random.seed(hash(text) % (2**32))
-            return [random.uniform(-1, 1) for _ in range(768)]
-    return embed_text
+def setup_embedding():
+    """Setup HuggingFace embedding function with caching"""
+    return setup_embedding_fn()
+
 
 @st.cache_resource
-def setup_llm_fn(prompt: str):
-    """Setup LLM function using Gemini"""
-    try:
-        system_instruction = GroundingPrompts.system_prompt()
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-            )
-        )
-        return response.text 
-    except Exception as e:
-        print(f"Error While generating {e}")
+def setup_llm_cached():
+    """Setup HuggingFace LLM with caching"""
+    return setup_llm()
 
 
 def process_uploaded_documents(uploaded_files):
@@ -155,9 +131,9 @@ def process_uploaded_documents(uploaded_files):
             st.success(f"✓ Loaded {len(docs)} documents, created {len(chunks)} chunks")
 
             # Step 2: Setup vector store
-            st.info("🔍 Setting up vector store...")
-            vector_store = VectorStoreFactory.create("in_memory")
-            embedding_fn = setup_embedding_fn()
+            st.info("🔍 Setting up FAISS vector store...")
+            vector_store = VectorStoreFactory.create("faiss", embedding_dim=384)
+            embedding_fn = setup_embedding()
 
             # Embed chunks with progress bar
             progress_bar = st.progress(0)
@@ -168,13 +144,13 @@ def process_uploaded_documents(uploaded_files):
 
             vector_store.add_chunks(chunks)
             st.session_state.vector_store = vector_store
-            st.success(f"✓ Vector store ready: {vector_store.get_stats()}") #type:ignore
+            st.success(f"✓ Vector store ready: {vector_store.get_stats()}")
             
             # Step 3: Setup retrieval
             st.info("🎯 Configuring hybrid retrieval...")
             retriever = HybridRetriever(
                 vector_store=vector_store,
-                embedding_fn=embedding_fn,#type: ignore
+                embedding_fn=embedding_fn,
                 dense_weight=0.6,
                 sparse_weight=0.4,
             )
@@ -183,10 +159,10 @@ def process_uploaded_documents(uploaded_files):
 
             # Step 4: Setup generation
             st.info("🚀 Initializing LLM...")
+            llm_fn = setup_llm_cached()
             generator = RAGGenerator(
                 retriever=retriever,
-                llm_client=client,
-                model_name="gemini-2.5-flash",
+                llm_fn=llm_fn,
                 min_context_score=0.2,
                 top_k=5,
             )
@@ -196,6 +172,8 @@ def process_uploaded_documents(uploaded_files):
             return True
     except Exception as e:
         st.error(f"❌ Error processing documents: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
     
 
@@ -205,7 +183,7 @@ def process_uploaded_documents(uploaded_files):
 
 # Header
 st.markdown("# 🤖 Intelligent Document Q&A System Using RAG")
-st.markdown("Upload documents and ask questions powered by RAG + Gemini AI")
+st.markdown("Upload documents and ask questions powered by RAG + HuggingFace")
 
 with st.sidebar:
     st.markdown("### Retrieval Settings")
@@ -235,6 +213,7 @@ with st.sidebar:
         st.metric("Total Tokens", total_tokens)
 
 tab1, tab2, tab3 = st.tabs(["📤 Upload & Process", "❓ Ask Questions", "📝 History"])
+
 # ========================================================================
 # TAB 1: DOCUMENT UPLOAD & PROCESSING
 # ========================================================================
@@ -289,130 +268,133 @@ with tab1:
             for doc in st.session_state.documents:
                 st.markdown(f"**{doc.filename}**")
                 st.caption(f"Type: {doc.doc_type} | Size: {len(doc.content)} chars")
+
 # ========================================================================
 # TAB 2: QUERY INTERFACE
 # ========================================================================
     
 with tab2:
-        st.header("Ask Questions")
+    st.header("Ask Questions")
+    
+    if not st.session_state.processed:
+        st.warning("### 📤 Please upload and process documents first")
+    else:
+        st.markdown("Ask any question about your documents. The system will search for relevant context and provide grounded answers.")
         
-        if not st.session_state.processed:
-            st.warning("### 📤 Please upload and process documents first")
-        else:
-            st.markdown("Ask any question about your documents. The system will search for relevant context and provide grounded answers.")
-            
-            # Query input
-            query = st.text_input(
-                "Your question:",
-                placeholder="e.g., How do I troubleshoot WiFi issues?",
-                help="Ask anything about your documents"
-            )
-            
-            col1, col2, col3 = st.columns([2, 1, 1])
-            
-            with col1:
-                search_button = st.button("🔍 Search", use_container_width=True)
-            with col2:
-                top_k = st.number_input("Top Results", min_value=1, max_value=10, value=5)
-            with col3:
-                st.write("")  # Spacing
-            
-            # Execute query
-            if search_button and query:
-                with st.spinner("Searching and generating response..."):
-                    try:
-                        # Update retriever weights
-                        st.session_state.retriever.dense_weight = dense_weight
-                        st.session_state.retriever.sparse_weight = sparse_weight
-                        
-                        # Generate response
-                        response = st.session_state.generator.generate(
-                            query,
-                            use_verification=False
-                        )
-                        
-                        # Add to history
-                        st.session_state.query_history.append({
-                            "query": query,
-                            "response": response
-                        })
-                        
-                        # Display results
-                        st.markdown("---")
-                        st.markdown("### 💡 Answer")
-                        st.markdown(response['answer'])
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Confidence", f"{response['confidence']:.1%}")
-                        with col2:
-                            st.metric("Context Chunks", response['num_context_chunks'])
-                        with col3:
-                            st.metric("Sources", len(response['sources']))
-                        
-                        # Sources
-                        st.markdown("### 📚 Sources")
-                        for source in response['sources']:
-                            st.caption(f"📄 {source}")
-                        
-                        # Chunk scores
-                        if response['chunk_scores']:
-                            with st.expander("📊 Retrieval Scores"):
-                                for score in response['chunk_scores']:
-                                    col1, col2 = st.columns([3, 1])
-                                    with col1:
-                                        st.caption(score['chunk_id'])
-                                    with col2:
-                                        st.metric("Score", f"{score['score']:.3f}")
+        # Query input
+        query = st.text_input(
+            "Your question:",
+            placeholder="e.g., What is the main topic?",
+            help="Ask anything about your documents"
+        )
+        
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            search_button = st.button("🔍 Search", use_container_width=True)
+        with col2:
+            top_k = st.number_input("Top Results", min_value=1, max_value=10, value=5)
+        with col3:
+            st.write("")  # Spacing
+        
+        # Execute query
+        if search_button and query:
+            with st.spinner("Searching and generating response..."):
+                try:
+                    # Update retriever weights
+                    st.session_state.retriever.dense_weight = dense_weight
+                    st.session_state.retriever.sparse_weight = sparse_weight
                     
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
-            
-            elif search_button:
-                st.warning("Please enter a question")
+                    # Generate response
+                    response = st.session_state.generator.generate(
+                        query,
+                        use_verification=False
+                    )
+                    
+                    # Add to history
+                    st.session_state.query_history.append({
+                        "query": query,
+                        "response": response
+                    })
+                    
+                    # Display results
+                    st.markdown("---")
+                    st.markdown("### 💡 Answer")
+                    st.markdown(response['answer'])
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Confidence", f"{response['confidence']:.1%}")
+                    with col2:
+                        st.metric("Context Chunks", response['num_context_chunks'])
+                    with col3:
+                        st.metric("Sources", len(response['sources']))
+                    
+                    # Sources
+                    st.markdown("### 📚 Sources")
+                    for source in response['sources']:
+                        st.caption(f"📄 {source}")
+                    
+                    # Chunk scores
+                    if response['chunk_scores']:
+                        with st.expander("📊 Retrieval Scores"):
+                            for score in response['chunk_scores']:
+                                col1, col2 = st.columns([3, 1])
+                                with col1:
+                                    st.caption(score['chunk_id'])
+                                with col2:
+                                    st.metric("Score", f"{score['score']:.3f}")
+                
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+        
+        elif search_button:
+            st.warning("Please enter a question")
 
 # ========================================================================
 # TAB 3: QUERY HISTORY
 # ========================================================================
 
 with tab3:
-        st.header("Query History")
+    st.header("Query History")
+    
+    if not st.session_state.query_history:
+        st.info("No queries yet. Ask a question in the 'Ask Questions' tab!")
+    else:
+        st.markdown(f"**Total Queries: {len(st.session_state.query_history)}**")
+        st.markdown("---")
         
-        if not st.session_state.query_history:
-            st.info("No queries yet. Ask a question in the 'Ask Questions' tab!")
-        else:
-            st.markdown(f"**Total Queries: {len(st.session_state.query_history)}**")
-            st.markdown("---")
-            
-            for i, item in enumerate(reversed(st.session_state.query_history), 1):
-                with st.expander(f"Query {len(st.session_state.query_history) - i + 1}: {item['query'][:50]}..."):
-                    st.markdown("**Question:**")
-                    st.write(item['query'])
-                    st.markdown("**Answer:**")
-                    st.write(item['response']['answer'][:500] + "...")
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.caption(f"Confidence: {item['response']['confidence']:.1%}")
-                    with col2:
-                        st.caption(f"Chunks: {item['response']['num_context_chunks']}")
-                    with col3:
-                        st.caption(f"Sources: {len(item['response']['sources'])}")
-            if st.button("📥 Export History as Text"):
-                history_text = ""
-                for i, item in enumerate(st.session_state.query_history, 1):
-                    history_text += f"\n{'='*80}\n"
-                    history_text += f"Query {i}: {item['query']}\n"
-                    history_text += f"{'-'*80}\n"
-                    history_text += f"Answer: {item['response']['answer']}\n"
-                    history_text += f"Confidence: {item['response']['confidence']:.1%}\n"
-                    history_text += f"Sources: {', '.join(item['response']['sources'])}\n"
+        for i, item in enumerate(reversed(st.session_state.query_history), 1):
+            with st.expander(f"Query {len(st.session_state.query_history) - i + 1}: {item['query'][:50]}..."):
+                st.markdown("**Question:**")
+                st.write(item['query'])
+                st.markdown("**Answer:**")
+                st.write(item['response']['answer'][:500] + "...")
                 
-                st.download_button(
-                    label="Download History",
-                    data=history_text,
-                    file_name="query_history.txt",
-                    mime="text/plain"
-                )
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.caption(f"Confidence: {item['response']['confidence']:.1%}")
+                with col2:
+                    st.caption(f"Chunks: {item['response']['num_context_chunks']}")
+                with col3:
+                    st.caption(f"Sources: {len(item['response']['sources'])}")
+        if st.button("📥 Export History as Text"):
+            history_text = ""
+            for i, item in enumerate(st.session_state.query_history, 1):
+                history_text += f"\n{'='*80}\n"
+                history_text += f"Query {i}: {item['query']}\n"
+                history_text += f"{'-'*80}\n"
+                history_text += f"Answer: {item['response']['answer']}\n"
+                history_text += f"Confidence: {item['response']['confidence']:.1%}\n"
+                history_text += f"Sources: {', '.join(item['response']['sources'])}\n"
+            
+            st.download_button(
+                label="Download History",
+                data=history_text,
+                file_name="query_history.txt",
+                mime="text/plain"
+            )
 
 
 # ============================================================================
@@ -422,7 +404,7 @@ with tab3:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; font-size: 0.9rem;">
-    <p>RAG v1.0 | Powered by Gemini AI + RAG | Built with Streamlit</p>
+    <p>RAG v1.0 | Powered by HuggingFace + FAISS + LangChain | Built with Streamlit</p>
     <p>🚀 <strong>Intelligent Document Q&A System</strong></p>
 </div>
 """, unsafe_allow_html=True)

@@ -1,61 +1,31 @@
 import os
 from dotenv import load_dotenv
-# import google.generativeai as genai
-from google import genai
-from google.genai import types
 
 from src.rag.doc_proc.processor import DocumentProcessor
 from src.rag.vector_store.factory import VectorStoreFactory
 from src.rag.retrieval.retriever import HybridRetriever
 from src.rag.generation.generator import RAGGenerator
 from src.rag.generation.prompts import GroundingPrompts
+from src.rag.generation.langchain_setup import setup_embedding_fn, setup_llm
 
 load_dotenv()
-client = genai.Client()
-
-def setup_embedding_fn():
-    """Setup embedding function using Gemini"""
-    def embed_text(text: str):
-        """Embed text using Gemini's embedding model"""
-        try:
-            result = client.models.embed_content(
-                model='gemini-embedding-001',
-                contents=text,
-            )
-            return result.embeddings[0].values #type: ignore
-        except Exception as e:
-            print(f"Embedding failed: {e}")
-            return [0.0] * 768
-    
-    return embed_text
-
-def setup_llm_fn(prompt: str):
-    """Setup LLM function using Gemini"""
-    try:
-        system_instruction = GroundingPrompts.system_prompt()
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-            )
-        )
-        return response.text 
-    except Exception as e:
-        print(f"Error While generating {e}")
 
 
 def main():
     """Main RAG pipeline demonstration"""
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise ValueError("GOOGLE_API_KEY not set. Please configure .env file.")
     print("=" * 80)
     print("RAG System for Product Documentation QA")
+    print("Using HuggingFace Models + FAISS Vector Store + LangChain")
+    print("=" * 80)
 
+    # Verify HF_TOKEN is set
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        print("Warning: HF_TOKEN not set in .env file")
+    else:
+        print(f"✓ HF_TOKEN configured")
 
     ## Document Processing Step
-    print("=" * 80)
     print("\n[1] DOCUMENT PROCESSING")
     print("-" * 80)
     processor = DocumentProcessor(chunk_size=400, chunk_overlap=100)
@@ -63,23 +33,22 @@ def main():
     print(f"✓ Loaded {len(docs)} documents")
     for doc in docs:
         print(f"  - {doc.filename} ({len(doc.content)} chars)")
+    
     chunks = processor.process()
     print(f"✓ Created {len(chunks)} chunks")
     print(f"  Total tokens: {sum(c.token_count for c in chunks)}")
 
-
     ## Setup Vector Store
     print("\n[2] VECTOR STORE SETUP")
     print("-" * 80)
-    vector_store = VectorStoreFactory.create("in_memory")
-    print("✓ Created in-memory vector store")
+    # Using FAISS with embedding dimension 384 (for all-MiniLM-L6-v2)
+    vector_store = VectorStoreFactory.create("faiss", embedding_dim=384)
+    print("✓ Created FAISS vector store (384-dim embeddings)")
 
-
-    ## SetUp embedding function
+    ## Setup embedding function using HuggingFace
+    print("\n[3] EMBEDDING SETUP")
+    print("-" * 80)
     embedding_fn = setup_embedding_fn()
-    print("✓ Setup Gemini embedding function")
-
-
 
     ## Embed and store chunks
     print("Embedding and storing chunks...")
@@ -92,70 +61,70 @@ def main():
         except Exception as e:
             print(f"Embedding failed for chunk {chunk.chunk_id}: {e}")
 
-    
     vector_store.add_chunks(chunks)
-    stats = vector_store.get_stats() #type:ignore
+    stats = vector_store.get_stats()
     print(f"✓ Vector store ready: {stats}")
 
-
-    ## Retrieval SetUp
-    print("\n[3] RETRIEVAL SETUP")
+    ## Setup Retriever
+    print("\n[4] RETRIEVER SETUP")
     print("-" * 80)
     retriever = HybridRetriever(
         vector_store=vector_store,
-        embedding_fn=embedding_fn, #type:ignore
-        dense_weight=0.6,
-        sparse_weight=0.4,
+        embedding_fn=embedding_fn,
+        dense_weight=0.7,
+        sparse_weight=0.3,
     )
-    print("✓ Hybrid retriever configured (60% dense, 40% sparse)")
+    print("✓ Hybrid retriever initialized (70% dense, 30% sparse)")
 
-
-    ## setup Generation
-
-    generator = RAGGenerator(
-    retriever=retriever,
-    llm_client=client,
-    model_name="gemini-2.5-flash",
-    min_context_score=0.2,
-    top_k=5,
-    )
-
-    print("\n[4] GENERATION SETUP")
+    ## Setup LLM
+    print("\n[5] LLM SETUP")
     print("-" * 80)
-    # llm_fn = setup_llm_fn()
-    print("✓ Gemini LLM configured")
-    
+    llm_fn = setup_llm()
 
+    ## Setup RAG Generator
+    print("\n[6] RAG GENERATOR SETUP")
+    print("-" * 80)
+    generator = RAGGenerator(
+        retriever=retriever,
+        llm_fn=llm_fn,
+        min_context_score=0.3,
+        top_k=5,
+    )
+    print("✓ RAG generator initialized")
 
-    ## Run Example
-    print("\n[5] EXAMPLE QUERIES")
+    ## Test the pipeline with sample queries
+    print("\n[7] TESTING RAG PIPELINE")
     print("=" * 80)
-    
-    queries = [
-        # "How do I troubleshoot WiFi connection issues?",
-        # "What is the document about",
-        # "Can multiple phones control the same coffee maker?",
-        # "How often should I clean the machine?",
-        "What is the capacity of the machine?"
+
+    test_queries = [
+        "What is the main topic of this document?",
+        "Can you summarize the content?",
     ]
-    for i, query in enumerate(queries, 1):
+
+    for i, query in enumerate(test_queries, 1):
         print(f"\nQuery {i}: {query}")
         print("-" * 80)
-        response = generator.generate(query,use_verification=False)
-        print(f"Answer: {response['answer'][:500]}...")
-        print(f"Sources: {', '.join(response['sources'])}")
-        print(f"Confidence: {response['confidence']:.2f}")
-        print(f"Retrieved {response['num_context_chunks']} context chunks")
-        
-        if 'chunk_scores' in response.keys():
-            print("Chunk scores:")
-            for score in response['chunk_scores'][:3]:
-                print(f"  - {score['chunk_id']}: {score['score']:.3f}")
+        try:
+            response = generator.generate(query)
+            print(f"Answer: {response['answer']}")
+            print(f"Sources: {', '.join(response['sources'])}")
+            print(f"Confidence: {response['confidence']:.2f}")
+            print(f"Context chunks used: {response['num_context_chunks']}")
+        except Exception as e:
+            print(f"Error generating response: {e}")
+            import traceback
+            traceback.print_exc()
+
     print("\n" + "=" * 80)
-    print("RAG Pipeline demonstration complete!")
+    print("RAG Pipeline Test Complete")
     print("=" * 80)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Error in main: {e}")
+        import traceback
+        traceback.print_exc()
         
