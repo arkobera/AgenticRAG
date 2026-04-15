@@ -302,8 +302,10 @@ with tab2:
             with st.spinner("Searching and generating response..."):
                 try:
                     # Update retriever weights
-                    st.session_state.retriever.dense_weight = dense_weight
-                    st.session_state.retriever.sparse_weight = sparse_weight
+                    total_weight = dense_weight + sparse_weight
+                    st.session_state.retriever.dense_weight = dense_weight / total_weight
+                    st.session_state.retriever.sparse_weight = sparse_weight / total_weight
+                    st.session_state.generator.top_k = int(top_k)
                     
                     # Generate response
                     response = st.session_state.generator.generate(

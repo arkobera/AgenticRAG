@@ -1,0 +1,41 @@
+document_processing:
+  chunk_size: 200
+  chunk_overlap: 50
+  min_chunk_size: 50
+  supported_formats:
+    - .txt
+    - .md
+
+embeddings:
+  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+  embedding_dim: 384
+  device: "cpu"
+  show_progress: false
+
+vector_store:
+  type: "faiss"
+  embedding_dim: 384
+
+llm:
+  model_id: "distilgpt2"   # 🔥 CHANGE THIS
+  max_new_tokens: 120
+  do_sample: true
+  temperature: 0.7
+  top_p: 0.9
+  device: "cpu"
+
+retriever:
+  dense_weight: 0.8
+  sparse_weight: 0.2
+  candidate_k_multiplier: 1
+  use_dense: true
+  use_sparse: true
+
+rag_generator:
+  min_context_score: 0.0
+  top_k: 2
+  use_verification: false
+
+logging:
+  verbose: true
+  show_retrieval_reasoning: true

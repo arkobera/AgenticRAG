@@ -4,20 +4,33 @@ from typing import List, Dict, Optional
 from pathlib import Path
 from src.rag.doc_proc.models import Document, DocumentChunk
 from src.rag.doc_proc.chunker import SemanticChunker
+from src.config import get_config
 
 
 class DocumentProcessor:
     """
     Orchestrates document loading, cleaning, and chunking.
+    Parameters are loaded from config.yaml.
     """
     
     def __init__(
         self,
-        chunk_size: int = 400,
-        chunk_overlap: int = 100,
-        min_chunk_size: int = 50,
+        chunk_size: Optional[int] = None,
+        chunk_overlap: Optional[int] = None,
+        min_chunk_size: Optional[int] = None,
     ):
-        """Initialize document processor"""
+        """
+        Initialize document processor.
+        If parameters not provided, they'll be loaded from config.yaml
+        """
+        # Load from config if not provided
+        if chunk_size is None:
+            chunk_size = get_config("document_processing.chunk_size")
+        if chunk_overlap is None:
+            chunk_overlap = get_config("document_processing.chunk_overlap")
+        if min_chunk_size is None:
+            min_chunk_size = get_config("document_processing.min_chunk_size")
+        
         self.chunker = SemanticChunker(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -25,18 +38,19 @@ class DocumentProcessor:
         )
         self.documents: Dict[str, Document] = {}
         self.chunks: List[DocumentChunk] = []
+        self.supported_formats = get_config("document_processing.supported_formats")
     
     def load_documents(self, directory: str) -> List[Document]:
         """
         Load documents from a directory.
         
-        Supports: .txt, .md, .json files
+        Supports formats specified in config.yaml
         """
         documents = []
         path = Path(directory)
         
         for file_path in path.glob('**/*'):
-            if file_path.is_file() and file_path.suffix in ['.txt', '.md', '.json','.csv']:
+            if file_path.is_file() and file_path.suffix in self.supported_formats:
                 try:
                     doc = self._load_single_file(file_path)
                     if doc:

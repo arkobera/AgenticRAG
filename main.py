@@ -7,12 +7,24 @@ from src.rag.retrieval.retriever import HybridRetriever
 from src.rag.generation.generator import RAGGenerator
 from src.rag.generation.prompts import GroundingPrompts
 from src.rag.generation.langchain_setup import setup_embedding_fn, setup_llm
+from src.config import get_config, Config
 
 load_dotenv()
 
 
+def resolve_document_directory() -> str:
+    """Pick the first available input directory for local runs."""
+    for candidate in ("data", "raw", "benchmark"):
+        if os.path.isdir(candidate):
+            return candidate
+    raise FileNotFoundError("No document directory found. Expected one of: data/, raw/, benchmark/")
+
+
 def main():
     """Main RAG pipeline demonstration"""
+    # Load configuration
+    config = Config()
+    
     print("=" * 80)
     print("RAG System for Product Documentation QA")
     print("Using HuggingFace Models + FAISS Vector Store + LangChain")
@@ -28,8 +40,9 @@ def main():
     ## Document Processing Step
     print("\n[1] DOCUMENT PROCESSING")
     print("-" * 80)
-    processor = DocumentProcessor(chunk_size=400, chunk_overlap=100)
-    docs = processor.load_documents("data/")
+    processor = DocumentProcessor()  # Parameters loaded from config
+    document_dir = resolve_document_directory()
+    docs = processor.load_documents(document_dir)
     print(f"✓ Loaded {len(docs)} documents")
     for doc in docs:
         print(f"  - {doc.filename} ({len(doc.content)} chars)")
@@ -41,9 +54,10 @@ def main():
     ## Setup Vector Store
     print("\n[2] VECTOR STORE SETUP")
     print("-" * 80)
-    # Using FAISS with embedding dimension 384 (for all-MiniLM-L6-v2)
-    vector_store = VectorStoreFactory.create("faiss", embedding_dim=384)
-    print("✓ Created FAISS vector store (384-dim embeddings)")
+    # Using FAISS with embedding dimension from config
+    embedding_dim = get_config("embeddings.embedding_dim")
+    vector_store = VectorStoreFactory.create("faiss", embedding_dim=embedding_dim)
+    print(f"✓ Created FAISS vector store ({embedding_dim}-dim embeddings)")
 
     ## Setup embedding function using HuggingFace
     print("\n[3] EMBEDDING SETUP")
@@ -71,10 +85,10 @@ def main():
     retriever = HybridRetriever(
         vector_store=vector_store,
         embedding_fn=embedding_fn,
-        dense_weight=0.7,
-        sparse_weight=0.3,
-    )
-    print("✓ Hybrid retriever initialized (70% dense, 30% sparse)")
+    )  # Weights loaded from config
+    dense_weight = get_config("retriever.dense_weight")
+    sparse_weight = get_config("retriever.sparse_weight")
+    print(f"✓ Hybrid retriever initialized ({dense_weight*100:.0f}% dense, {sparse_weight*100:.0f}% sparse)")
 
     ## Setup LLM
     print("\n[5] LLM SETUP")
@@ -87,10 +101,10 @@ def main():
     generator = RAGGenerator(
         retriever=retriever,
         llm_fn=llm_fn,
-        min_context_score=0.3,
-        top_k=5,
-    )
-    print("✓ RAG generator initialized")
+    )  # Parameters loaded from config
+    min_context_score = get_config("rag_generator.min_context_score")
+    top_k = get_config("rag_generator.top_k")
+    print(f"✓ RAG generator initialized (top_k={top_k}, min_score={min_context_score})")
 
     ## Test the pipeline with sample queries
     print("\n[7] TESTING RAG PIPELINE")
@@ -98,7 +112,6 @@ def main():
 
     test_queries = [
         "What is the main topic of this document?",
-        "Can you summarize the content?",
     ]
 
     for i, query in enumerate(test_queries, 1):
@@ -117,6 +130,7 @@ def main():
 
     print("\n" + "=" * 80)
     print("RAG Pipeline Test Complete")
+    print("Configuration loaded from: config.yaml")
     print("=" * 80)
 
 

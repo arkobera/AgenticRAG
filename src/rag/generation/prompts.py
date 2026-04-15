@@ -116,5 +116,7 @@ class ResponseBuilder:
             "sources": [],
             "confidence": 0.0,
             "grounded": False,
-            "num_context_chunks":0
+            "num_context_chunks": 0,
+            "chunk_scores": [],
+            "verification": False,
         }

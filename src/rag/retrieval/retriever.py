@@ -1,7 +1,8 @@
-from typing import List, Optional, Callable
-import numpy as np
+from typing import Dict, List, Optional, Callable
 from src.rag.vector_store.base import VectorStore
 from src.rag.doc_proc.models import RetrievalResult
+from src.config import get_config
+
 
 class HybridRetriever:
     """
@@ -10,13 +11,14 @@ class HybridRetriever:
     2. Sparse BM25 search (keyword matching)
     
     Uses weighted combination for final ranking.
+    Parameters are loaded from config.yaml
     """
     def __init__(
         self,
         vector_store: VectorStore,
         embedding_fn: Optional[Callable[[str], List[float]]] = None,
-        dense_weight: float = 0.7,
-        sparse_weight: float = 0.3,
+        dense_weight: Optional[float] = None,
+        sparse_weight: Optional[float] = None,
     ):
         """
         Initialize hybrid retriever.
@@ -24,17 +26,50 @@ class HybridRetriever:
         Args:
             vector_store: Vector store backend
             embedding_fn: Function to embed text (required for dense search)
-            dense_weight: Weight for dense search results (0-1)
-            sparse_weight: Weight for sparse search results (0-1)
+            dense_weight: Weight for dense search results (0-1), uses config if None
+            sparse_weight: Weight for sparse search results (0-1), uses config if None
         """
+        # Load from config if not provided
+        if dense_weight is None:
+            dense_weight = get_config("retriever.dense_weight")
+        if sparse_weight is None:
+            sparse_weight = get_config("retriever.sparse_weight")
+        
         self.vector_store = vector_store
         self.embedding_fn = embedding_fn
+        if dense_weight < 0 or sparse_weight < 0:
+            raise ValueError("Retriever weights must be non-negative")
+
         self.dense_weight = dense_weight
         self.sparse_weight = sparse_weight
         total = dense_weight + sparse_weight
+        if total == 0:
+            raise ValueError("At least one retriever weight must be greater than zero")
         self.dense_weight /= total
         self.sparse_weight /= total
-    def retrieve(self,query: str,top_k: int = 5,use_dense: bool = True,use_sparse: bool = True,) -> List[RetrievalResult]:
+
+    @staticmethod
+    def _normalize_scores(results: List[RetrievalResult]) -> Dict[str, float]:
+        """Normalize result scores into a stable 0-1 range per retrieval method."""
+        if not results:
+            return {}
+
+        max_score = max(result.score for result in results)
+        if max_score <= 0:
+            return {result.chunk_id: 0.0 for result in results}
+
+        return {
+            result.chunk_id: min(result.score / max_score, 1.0)
+            for result in results
+        }
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 5,
+        use_dense: bool = True,
+        use_sparse: bool = True,
+    ) -> List[RetrievalResult]:
         """
         Retrieve relevant chunks using hybrid search.
         
@@ -48,12 +83,17 @@ class HybridRetriever:
             List of RetrievalResult objects ranked by combined score
         """
         if not use_dense and not use_sparse:
-            raise ValueError("At least one retrieval method must be enabled")  
+            raise ValueError("At least one retrieval method must be enabled")
+
+        candidate_k_multiplier = get_config("retriever.candidate_k_multiplier")
+        candidate_k = max(top_k * candidate_k_multiplier, top_k)
         combined_results = {}
+
         if use_dense and self.embedding_fn:
             try:
                 query_embd = self.embedding_fn(query)
-                dense_res  = self.vector_store.search(query_embd)
+                dense_res = self.vector_store.search(query_embd, top_k=candidate_k)
+                dense_scores = self._normalize_scores(dense_res)
                 for res in dense_res:
                     if res.chunk_id not in combined_results:
                         combined_results[res.chunk_id] = {
@@ -63,12 +103,14 @@ class HybridRetriever:
                             "dense_score": 0.0,
                             "sparse_score": 0.0,
                         }
-                    combined_results[res.chunk_id]["dense_score"] = res.score
+                    combined_results[res.chunk_id]["dense_score"] = dense_scores[res.chunk_id]
             except Exception as e:
                 print(f"Dense search failed : {e}")
+
         if use_sparse:
             try:
-                sparse_results = self.vector_store.keyword_search(query, top_k=top_k * 2)          
+                sparse_results = self.vector_store.keyword_search(query, top_k=candidate_k)
+                sparse_scores = self._normalize_scores(sparse_results)
                 for result in sparse_results:
                     if result.chunk_id not in combined_results:
                         combined_results[result.chunk_id] = {
@@ -78,15 +120,16 @@ class HybridRetriever:
                             "dense_score": 0.0,
                             "sparse_score": 0.0,
                         }
-                    combined_results[result.chunk_id]["sparse_score"] = result.score
+                    combined_results[result.chunk_id]["sparse_score"] = sparse_scores[result.chunk_id]
             except Exception as e:
                 print(f"Sparse search failed: {e}")
+
         final_results = []
         for chunk_id, data in combined_results.items():
             combined_score = (
                 data["dense_score"] * self.dense_weight +
                 data["sparse_score"] * self.sparse_weight
-            )         
+            )
             final_results.append(
                 RetrievalResult(
                     chunk_id=chunk_id,
@@ -98,14 +141,19 @@ class HybridRetriever:
             )
         final_results.sort(key=lambda x: x.score, reverse=True)
         return final_results[:top_k]
-    def retrieve_with_reasoning(self,query: str,top_k: int = 5,) -> tuple[List[RetrievalResult], dict]:
+
+    def retrieve_with_reasoning(
+        self,
+        query: str,
+        top_k: int = 5,
+    ) -> tuple[List[RetrievalResult], dict]:
         """
         Retrieve with detailed reasoning about scores.
         
         Returns:
             (results, reasoning_dict)
         """
-        results = self.retrieve(query)
+        results = self.retrieve(query, top_k=top_k)
         reasoning = {
             "query": query,
             "retrieval_method": "hybrid",

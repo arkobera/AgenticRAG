@@ -2,20 +2,22 @@ from typing import Optional, Callable, List, Dict
 from src.rag.retrieval.retriever import HybridRetriever
 from src.rag.generation.prompts import GroundingPrompts, ResponseBuilder
 from src.rag.doc_proc.models import RetrievalResult
+from src.config import get_config
 
 
 class RAGGenerator:
     """
     Complete RAG pipeline: retrieves context and generates grounded responses.
     Uses HuggingFace LLM for generation.
+    Parameters are loaded from config.yaml
     """
 
     def __init__(
         self,
         retriever: HybridRetriever,
         llm_fn: Callable[[str], str],
-        min_context_score: float = 0.3,
-        top_k: int = 5,
+        min_context_score: Optional[float] = None,
+        top_k: Optional[int] = None,
     ):
         """
         Initialize RAG Generator.
@@ -23,9 +25,15 @@ class RAGGenerator:
         Args:
             retriever: HybridRetriever instance
             llm_fn: Function that takes a prompt and returns generated text
-            min_context_score: Minimum relevance score threshold
-            top_k: Number of chunks to retrieve
+            min_context_score: Minimum relevance score threshold, uses config if None
+            top_k: Number of chunks to retrieve, uses config if None
         """
+        # Load from config if not provided
+        if min_context_score is None:
+            min_context_score = get_config("rag_generator.min_context_score")
+        if top_k is None:
+            top_k = get_config("rag_generator.top_k")
+        
         self.retriever = retriever
         self.llm_fn = llm_fn
         self.min_context_score = min_context_score
