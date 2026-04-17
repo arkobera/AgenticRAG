@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 from src.rag.doc_proc.models import DocumentChunk, RetrievalResult
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 class VectorStore(ABC):
     """ Abstract base class for vector stores"""

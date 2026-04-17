@@ -3,6 +3,9 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 from src.rag.vector_store.base import VectorStore
 from src.rag.doc_proc.models import DocumentChunk, RetrievalResult
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 class InMemoryVectorStore(VectorStore):
     """
@@ -11,16 +14,20 @@ class InMemoryVectorStore(VectorStore):
     - BM25 keyword search
     """
     def __init__(self):
+        logger.info("Initializing InMemoryVectorStore")
         self.chunks: Dict[str, DocumentChunk] = {}
         self.embeddings: Dict[str, np.ndarray] = {}
         self.bm25: Optional[BM25Okapi] = None
         self.tokenized_corpus: List[List[str]] = []
+        logger.debug("InMemory vector store initialized successfully")
     def add_chunks(self, chunks: List[DocumentChunk]) -> None:
         """Add chunks to the store"""
+        logger.info(f"Adding {len(chunks)} chunks to in-memory store")
         for chunk in chunks:
             self.chunks[chunk.chunk_id] = chunk
             if chunk.embedding:
                 self.embeddings[chunk.chunk_id] = np.array(chunk.embedding)
+        logger.debug(f"Total chunks: {len(self.chunks)}, chunks with embeddings: {len(self.embeddings)}")
         self._rebuild_bm25_index()
     def _rebuild_bm25_index(self) -> None:
         """Rebuild BM25 index from all chunks"""
@@ -34,7 +41,9 @@ class InMemoryVectorStore(VectorStore):
         Dense vector similarity search.
         Uses cosine similarity.
         """
+        logger.debug(f"Performing dense vector search with top_k={top_k}")
         if not self.embeddings:
+            logger.warning("No embeddings in store, returning empty results")
             return []
         query_vec = np.array(query_embedding)
         results = []
@@ -54,13 +63,16 @@ class InMemoryVectorStore(VectorStore):
                 )
             )
         results.sort(key=lambda x: x.score, reverse=True)
+        logger.debug(f"Dense search returned {len(results)} results")
         return results[:top_k]    
     def keyword_search(self,query: str,top_k: int = 5,) -> List[RetrievalResult]:
         """
         BM25 keyword search.
         Good for exact terms and product codes.
         """
+        logger.debug(f"Performing BM25 keyword search with top_k={top_k}")
         if not self.bm25:
+            logger.warning("BM25 index not initialized, returning empty results")
             return []
         query_tokens = query.lower().split()
         scores = self.bm25.get_scores(query_tokens)
@@ -80,12 +92,15 @@ class InMemoryVectorStore(VectorStore):
                     )
                 )
         results.sort(key=lambda x: x.score, reverse=True)
+        logger.debug(f"BM25 search returned {len(results)} results")
         return results[:top_k]
     def delete_chunks(self, chunk_ids: List[str]) -> None:
         """Delete chunks by ID"""
+        logger.info(f"Deleting {len(chunk_ids)} chunks from in-memory store")
         for chunk_id in chunk_ids:
             self.chunks.pop(chunk_id, None)
             self.embeddings.pop(chunk_id, None)
+        logger.debug(f"Remaining chunks: {len(self.chunks)}")
         self._rebuild_bm25_index()
     def get_chunk(self, chunk_id: str) -> Optional[DocumentChunk]:
         """Retrieve a specific chunk"""

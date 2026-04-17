@@ -2,6 +2,9 @@ from typing import Dict, List, Optional, Callable
 from src.rag.vector_store.base import VectorStore
 from src.rag.doc_proc.models import RetrievalResult
 from src.config import get_config
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class HybridRetriever:
@@ -29,6 +32,7 @@ class HybridRetriever:
             dense_weight: Weight for dense search results (0-1), uses config if None
             sparse_weight: Weight for sparse search results (0-1), uses config if None
         """
+        logger.info("Initializing HybridRetriever...")
         # Load from config if not provided
         if dense_weight is None:
             dense_weight = get_config("retriever.dense_weight")
@@ -47,6 +51,9 @@ class HybridRetriever:
             raise ValueError("At least one retriever weight must be greater than zero")
         self.dense_weight /= total
         self.sparse_weight /= total
+        
+        logger.debug(f"Retriever weights: dense={self.dense_weight:.2f}, sparse={self.sparse_weight:.2f}")
+        logger.info("HybridRetriever initialized successfully")
 
     @staticmethod
     def _normalize_scores(results: List[RetrievalResult]) -> Dict[str, float]:
@@ -82,7 +89,10 @@ class HybridRetriever:
         Returns:
             List of RetrievalResult objects ranked by combined score
         """
+        logger.debug(f"Retrieving top {top_k} chunks for query: '{query[:50]}...'")
+        
         if not use_dense and not use_sparse:
+            logger.error("At least one retrieval method must be enabled")
             raise ValueError("At least one retrieval method must be enabled")
 
         candidate_k_multiplier = get_config("retriever.candidate_k_multiplier")

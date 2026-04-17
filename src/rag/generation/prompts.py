@@ -1,3 +1,7 @@
+from src.logger import get_logger
+
+logger = get_logger(__name__)
+
 class GroundingPrompts:
     """Structured prompts designed for strict context grounding"""
     
@@ -34,6 +38,7 @@ Rules:
         Returns:
             Complete prompt with context
         """
+        logger.debug(f"Building RAG prompt with {len(context_chunks)} context chunks from {len(sources)} sources")
         context_text = "\n\n".join([
             f"[Source: {source}]\n{chunk}"
             for chunk, source in zip(context_chunks, sources)
@@ -47,6 +52,7 @@ DOCUMENTATION CONTEXT:
 QUESTION: {query}
 
 ANSWER:"""
+        logger.debug(f"RAG prompt built successfully (length: {len(prompt)} chars)")
         return prompt
     
     @staticmethod
@@ -98,6 +104,7 @@ class ResponseBuilder:
         Returns:
             Structured response dictionary
         """
+        logger.debug(f"Building response with {len(sources)} sources and confidence={confidence}")
         return {
             "answer": answer,
             "sources": list(set(sources)),  # Deduplicate sources
@@ -111,6 +118,7 @@ class ResponseBuilder:
         reason: str = "No relevant information found",
     ) -> dict:
         """Build a response when no context is available"""
+        logger.warning(f"Building fallback response: {reason}")
         return {
             "answer": f"I don't have information about that in the documentation. {reason}",
             "sources": [],

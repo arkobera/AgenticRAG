@@ -1,6 +1,9 @@
 import re
 from typing import List, Optional
 from src.rag.doc_proc.models import DocumentChunk
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 class SemanticChunker:
     """
@@ -15,6 +18,7 @@ class SemanticChunker:
             chunk_size: Target tokens per chunk (approximate)
             chunk_overlap: Tokens to overlap between chunks
         """
+        logger.info(f"Initializing SemanticChunker with chunk_size={chunk_size}, overlap={chunk_overlap}, min_size={min_chunk_size}")
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.min_chunk_size = min_chunk_size
@@ -64,9 +68,11 @@ class SemanticChunker:
         :return: Description
         :rtype: List[DocumentChunk]
         """
+        logger.info(f"Chunking document: {doc_id} from {source_doc}")
         if metadata is None:
             metadata = {}
         segments = self._split_on_delimiters(text)
+        logger.debug(f"Split text into {len(segments)} segments")
 
         chunks = []
         current_chunk = []
@@ -108,4 +114,5 @@ class SemanticChunker:
                 else:
                     current_chunk = []
         
+        logger.info(f"Created {len(chunks)} chunks for {doc_id}")
         return chunks

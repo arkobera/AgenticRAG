@@ -5,6 +5,9 @@ from pathlib import Path
 from src.rag.doc_proc.models import Document, DocumentChunk
 from src.rag.doc_proc.chunker import SemanticChunker
 from src.config import get_config
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class DocumentProcessor:
@@ -23,6 +26,7 @@ class DocumentProcessor:
         Initialize document processor.
         If parameters not provided, they'll be loaded from config.yaml
         """
+        logger.info("Initializing DocumentProcessor...")
         # Load from config if not provided
         if chunk_size is None:
             chunk_size = get_config("document_processing.chunk_size")
@@ -30,6 +34,8 @@ class DocumentProcessor:
             chunk_overlap = get_config("document_processing.chunk_overlap")
         if min_chunk_size is None:
             min_chunk_size = get_config("document_processing.min_chunk_size")
+        
+        logger.debug(f"Chunking parameters: size={chunk_size}, overlap={chunk_overlap}, min={min_chunk_size}")
         
         self.chunker = SemanticChunker(
             chunk_size=chunk_size,
@@ -39,6 +45,7 @@ class DocumentProcessor:
         self.documents: Dict[str, Document] = {}
         self.chunks: List[DocumentChunk] = []
         self.supported_formats = get_config("document_processing.supported_formats")
+        logger.info(f"Supported formats: {self.supported_formats}")
     
     def load_documents(self, directory: str) -> List[Document]:
         """
@@ -46,8 +53,13 @@ class DocumentProcessor:
         
         Supports formats specified in config.yaml
         """
+        logger.info(f"Loading documents from: {directory}")
         documents = []
         path = Path(directory)
+        
+        if not path.exists():
+            logger.error(f"Directory not found: {directory}")
+            return documents
         
         for file_path in path.glob('**/*'):
             if file_path.is_file() and file_path.suffix in self.supported_formats:
@@ -56,9 +68,11 @@ class DocumentProcessor:
                     if doc:
                         documents.append(doc)
                         self.documents[doc.doc_id] = doc
+                        logger.debug(f"Loaded document: {file_path.name} (ID: {doc.doc_id})")
                 except Exception as e:
-                    print(f"Error loading {file_path}: {e}")
+                    logger.error(f"Error loading {file_path}: {e}", exc_info=True)
         
+        logger.info(f"Successfully loaded {len(documents)} documents from {directory}")
         return documents
     
     def _load_single_file(self, file_path: Path) -> Optional[Document]:
@@ -79,16 +93,20 @@ class DocumentProcessor:
             content = self._clean_text(content)
             
             if not content.strip():
+                logger.warning(f"Empty content after cleaning: {filename}")
                 return None
+            
+            doc_type = self._infer_doc_type(filename)
+            logger.debug(f"Parsed {filename} as {doc_type} ({len(content)} chars)")
             
             return Document(
                 doc_id=doc_id,
                 filename=filename,
                 content=content,
-                doc_type=self._infer_doc_type(filename),
+                doc_type=doc_type,
             )
         except Exception as e:
-            print(f"Failed to load {file_path}: {e}")
+            logger.error(f"Failed to load {file_path}: {e}", exc_info=True)
             return None
     
     def _clean_text(self, text: str) -> str:
@@ -117,6 +135,7 @@ class DocumentProcessor:
         """
         Process all loaded documents into chunks.
         """
+        logger.info("Processing documents into chunks...")
         self.chunks = []
         
         for doc_id, doc in self.documents.items():
@@ -133,7 +152,9 @@ class DocumentProcessor:
                 metadata=metadata,
             )
             self.chunks.extend(chunks)
+            logger.debug(f"Created {len(chunks)} chunks from {doc.filename}")
         
+        logger.info(f"Total chunks created: {len(self.chunks)} from {len(self.documents)} documents")
         return self.chunks
     
     def get_chunks_for_doc(self, doc_id: str) -> List[DocumentChunk]:

@@ -14,7 +14,9 @@ from langchain_community.llms import HuggingFacePipeline
 from transformers import pipeline
 import torch
 from src.config import get_config
+from src.logger import get_logger
 
+logger = get_logger(__name__)
 
 load_dotenv()
 
@@ -67,6 +69,7 @@ def setup_embedding_fn() -> Callable[[str], List[float]]:
     Returns:
         Callable that takes text and returns embedding vector
     """
+    logger.info("Setting up embedding function")
     local_fallback = _build_local_embedding_fn()
     try:
         # Load configuration
@@ -74,6 +77,7 @@ def setup_embedding_fn() -> Callable[[str], List[float]]:
         device = get_config("embeddings.device")
         show_progress = get_config("embeddings.show_progress")
         
+        logger.debug(f"Initializing HuggingFace embeddings: model={model_name}, device={device}")
         # Initialize HuggingFace embeddings through LangChain
         embeddings = HuggingFaceEmbeddings(
             model_name=model_name,
@@ -88,14 +92,14 @@ def setup_embedding_fn() -> Callable[[str], List[float]]:
                 embedding = embeddings.embed_query(text)
                 return embedding
             except Exception as e:
-                print(f"Embedding failed: {e}")
+                logger.error(f"Embedding failed: {e}, using fallback", exc_info=True)
                 return local_fallback(text)
         
-        print(f"✓ HuggingFace embeddings initialized ({model_name})")
+        logger.info(f"HuggingFace embeddings initialized successfully ({model_name})")
         return embed_text
     
     except Exception as e:
-        print(f"Failed to initialize HuggingFace embeddings: {e}")
+        logger.error(f"Failed to initialize HuggingFace embeddings: {e}, using fallback", exc_info=True)
         return local_fallback
 
 
@@ -107,11 +111,12 @@ def setup_llm() -> Callable[[str], str]:
     Returns:
         Callable that takes prompt and returns generated text
     """
+    logger.info("Setting up LLM")
     local_fallback = _build_local_llm_fallback()
     try:
         hf_token = os.getenv("HF_TOKEN")
         if not hf_token:
-            print("Warning: HF_TOKEN not set in .env, using without authentication")
+            logger.warning("HF_TOKEN not set in .env, continuing without authentication")
         
         # Load configuration
         model_id = get_config("llm.model_id")
@@ -121,6 +126,7 @@ def setup_llm() -> Callable[[str], str]:
         top_p = get_config("llm.top_p")
         device = get_config("llm.device")
         
+        logger.debug(f"LLM config: model={model_id}, device={device}, max_tokens={max_new_tokens}")
         # Determine device
         if device == "auto":
             device_id = 0 if torch.cuda.is_available() else -1
@@ -129,6 +135,7 @@ def setup_llm() -> Callable[[str], str]:
         else:  # cpu
             device_id = -1
         
+        logger.debug(f"Using device_id: {device_id}")
         # Create pipeline
         text_generation_pipeline = pipeline(
             "text-generation",
@@ -146,15 +153,17 @@ def setup_llm() -> Callable[[str], str]:
         def generate_response(prompt: str) -> str:
             """Generate response using HuggingFace LLM"""
             try:
+                logger.debug(f"Generating response for prompt (length: {len(prompt)} chars)")
                 response = llm.invoke(prompt)
+                logger.debug(f"Response generated (length: {len(response)} chars)")
                 return response.strip()
             except Exception as e:
-                print(f"LLM generation failed: {e}")
+                logger.error(f"LLM generation failed: {e}, using fallback", exc_info=True)
                 return local_fallback(prompt)
         
-        print(f"✓ HuggingFace LLM initialized ({model_id})")
+        logger.info(f"HuggingFace LLM initialized successfully ({model_id})")
         return generate_response
     
     except Exception as e:
-        print(f"Failed to initialize HuggingFace LLM: {e}")
+        logger.error(f"Failed to initialize HuggingFace LLM: {e}, using fallback", exc_info=True)
         return local_fallback

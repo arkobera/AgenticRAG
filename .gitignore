@@ -209,3 +209,5 @@ __marimo__/
 
 # Data Folder
 data/*
+benchmark/*
+

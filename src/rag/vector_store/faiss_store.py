@@ -4,6 +4,9 @@ import faiss
 from rank_bm25 import BM25Okapi
 from src.rag.vector_store.base import VectorStore
 from src.rag.doc_proc.models import DocumentChunk, RetrievalResult
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class FAISSVectorStore(VectorStore):
@@ -20,15 +23,18 @@ class FAISSVectorStore(VectorStore):
         Args:
             embedding_dim: Dimension of embeddings (default 384 for all-MiniLM-L6-v2)
         """
+        logger.info(f"Initializing FAISSVectorStore with embedding_dim={embedding_dim}")
         self.embedding_dim = embedding_dim
         self.chunks: Dict[str, DocumentChunk] = {}
         self.chunk_ids: List[str] = []
         self.index = faiss.IndexFlatL2(embedding_dim)
         self.bm25: Optional[BM25Okapi] = None
         self.tokenized_corpus: List[List[str]] = []
+        logger.debug("FAISS vector store initialized successfully")
     
     def add_chunks(self, chunks: List[DocumentChunk]) -> None:
         """Add chunks to the FAISS store"""
+        logger.info(f"Adding {len(chunks)} chunks to FAISS vector store")
         embeddings_list = []
         
         for chunk in chunks:
@@ -47,8 +53,10 @@ class FAISSVectorStore(VectorStore):
         if embeddings_list:
             embeddings_array = np.array(embeddings_list, dtype=np.float32)
             self.index.add(embeddings_array)
+            logger.debug(f"Added {len(embeddings_list)} embeddings to FAISS index")
         
         self._rebuild_bm25_index()
+        logger.debug(f"Total chunks in store: {len(self.chunks)}")
     
     def _rebuild_bm25_index(self) -> None:
         """Rebuild BM25 index from all chunks"""
@@ -63,7 +71,9 @@ class FAISSVectorStore(VectorStore):
         """
         Dense vector similarity search using FAISS.
         """
+        logger.debug(f"Performing dense vector search with top_k={top_k}")
         if len(self.chunk_ids) == 0:
+            logger.warning("Vector store is empty, returning no results")
             return []
         
         query_vec = np.array(query_embedding, dtype=np.float32).reshape(1, -1)
@@ -93,13 +103,16 @@ class FAISSVectorStore(VectorStore):
                     )
                 )
         
+        logger.debug(f"Dense search returned {len(results)} results")
         return results[:top_k]
     
     def keyword_search(self, query: str, top_k: int = 5) -> List[RetrievalResult]:
         """
         BM25 keyword search.
         """
+        logger.debug(f"Performing BM25 keyword search with top_k={top_k}")
         if not self.bm25 or not self.chunks:
+            logger.warning("BM25 index is empty, returning no results")
             return []
         
         query_tokens = query.lower().split()
@@ -121,10 +134,12 @@ class FAISSVectorStore(VectorStore):
                 )
         
         results.sort(key=lambda x: x.score, reverse=True)
+        logger.debug(f"BM25 search returned {len(results)} results")
         return results[:top_k]
     
     def delete_chunks(self, chunk_ids: List[str]) -> None:
         """Delete chunks by ID (FAISS doesn't support deletion, so we rebuild)"""
+        logger.info(f"Deleting {len(chunk_ids)} chunks from vector store")
         for chunk_id in chunk_ids:
             self.chunks.pop(chunk_id, None)
         
@@ -147,6 +162,7 @@ class FAISSVectorStore(VectorStore):
             self.index.add(embeddings_array)
         
         self._rebuild_bm25_index()
+        logger.debug(f"Index rebuilt after deletion. Remaining chunks: {len(self.chunks)}")
     
     def get_chunk(self, chunk_id: str) -> Optional[DocumentChunk]:
         """Retrieve a specific chunk"""

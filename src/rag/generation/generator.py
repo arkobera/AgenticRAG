@@ -3,6 +3,9 @@ from src.rag.retrieval.retriever import HybridRetriever
 from src.rag.generation.prompts import GroundingPrompts, ResponseBuilder
 from src.rag.doc_proc.models import RetrievalResult
 from src.config import get_config
+from src.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class RAGGenerator:
@@ -28,6 +31,7 @@ class RAGGenerator:
             min_context_score: Minimum relevance score threshold, uses config if None
             top_k: Number of chunks to retrieve, uses config if None
         """
+        logger.info("Initializing RAGGenerator...")
         # Load from config if not provided
         if min_context_score is None:
             min_context_score = get_config("rag_generator.min_context_score")
@@ -38,6 +42,9 @@ class RAGGenerator:
         self.llm_fn = llm_fn
         self.min_context_score = min_context_score
         self.top_k = top_k
+        
+        logger.debug(f"Generator config: top_k={top_k}, min_context_score={min_context_score}")
+        logger.info("RAGGenerator initialized successfully")
     
     def generate(self, query: str, use_verification: bool = False) -> Dict:
         """
@@ -50,17 +57,24 @@ class RAGGenerator:
         Returns:
             Dictionary with answer, sources, confidence, etc.
         """
+        logger.info(f"Generating response for query: '{query[:80]}...'")
+        
         retrieved_chunks, retrieval_reasoning = self.retriever.retrieve_with_reasoning(
             query=query,
             top_k=self.top_k,
         )
+        
+        logger.debug(f"Retrieved {len(retrieved_chunks)} chunks from query")
 
         relevant_chunks = [
             c for c in retrieved_chunks
             if c.score >= self.min_context_score
         ]
+        
+        logger.debug(f"Filtered to {len(relevant_chunks)} relevant chunks (score >= {self.min_context_score})")
 
         if not relevant_chunks:
+            logger.warning(f"No relevant chunks found for query: '{query}'")
             return ResponseBuilder.build_fallback_response(
                 query,
                 reason="Could not find relevant documentation.",
@@ -68,6 +82,8 @@ class RAGGenerator:
 
         context_texts = [c.content for c in relevant_chunks]
         sources = [c.source_doc for c in relevant_chunks]
+        
+        logger.debug(f"Using {len(sources)} sources: {sources}")
 
         prompt = GroundingPrompts.build_rag_prompt(
             query=query,
